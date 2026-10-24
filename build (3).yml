@@ -1,0 +1,83 @@
+name: Build Windows Game
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Validate and build Windows release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install CI tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes unzip nsis
+
+      - name: Install Godot 4.7.2 for headless validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/godot"
+          curl --fail --location --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip" \
+            --output "$RUNNER_TEMP/godot/godot.zip"
+          unzip -q "$RUNNER_TEMP/godot/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT_BIN="$(find "$RUNNER_TEMP/godot" -maxdepth 1 -type f -name 'Godot_v4.7.2-stable_linux.x86_64' -print -quit)"
+          test -n "$GODOT_BIN"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+          "$GODOT_BIN" --version
+
+      - name: Import and parse project
+        run: "$GODOT_BIN --headless --path . --editor --quit"
+
+      - name: Run gameplay regression tests
+        run: "$GODOT_BIN --headless --path . --script res://tests/smoke_test.gd"
+
+      - name: Export Windows Desktop preset
+        uses: firebelley/godot-export@v8.0.0
+        with:
+          godot_executable_download_url: https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+          godot_export_templates_download_url: https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz
+          relative_project_path: ./
+          presets_to_export: Windows Desktop
+          use_preset_export_path: true
+          archive_output: false
+          cache: true
+
+      - name: Build Hebrew Windows installer
+        run: |
+          set -euo pipefail
+          test -s build/windows/IsraelDelivery.exe
+          mkdir -p dist
+          makensis -V2 installer.nsi
+          test -s dist/IsraelDelivery-Setup.exe
+          file build/windows/IsraelDelivery.exe dist/IsraelDelivery-Setup.exe
+
+      - name: Upload Windows game and installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: IsraelDelivery-Windows-${{ github.run_number }}
+          path: |
+            build/windows/IsraelDelivery.exe
+            dist/IsraelDelivery-Setup.exe
+            README_HE.md
+            OPEN_DATA_NOTICES.md
+            THIRD_PARTY/Godot-LICENSE.txt
+            assets/fonts/LICENSE-DejaVu.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
